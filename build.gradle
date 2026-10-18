@@ -159,6 +159,11 @@ tasks.register('runPackagedClientAudit', net.fabricmc.loom.task.prod.ClientProdu
 		mods.from(tasks.named(legacyTarget ? 'remapJar' : 'jar'))
 	}
 	if (!oldClientTarget) jvmArgs.add('-Dfabric.client.gametest')
+    // This framework generation can deadlock its packet tracker during pause screens.
+    // The audit explicitly waits for client-side state before checking behavior.
+    if (project.minecraft_version in ['1.21.9', '1.21.10', '1.21.11']) {
+        jvmArgs.add('-Dfabric.client.gametest.disableNetworkSynchronizer')
+    }
 	runDir = layout.buildDirectory.dir("run/packaged-${project.minecraft_version}")
 }
 
@@ -175,7 +180,9 @@ def prepareClientSources = tasks.register('prepareClientSources', Sync) {
 sourceSets.client.java.setSrcDirs([prepareClientSources])
 tasks.named('compileClientKotlin') { dependsOn prepareClientSources }
 
+def extendedWorldLoadAudit = project.minecraft_version in ['1.21.9', '1.21.10', '1.21.11']
 def prepareAuditSources = tasks.register('prepareAuditSources', Sync) {
+	if (extendedWorldLoadAudit) from('src/worldloadtest/java')
 	inputs.property 'minecraftTarget', project.minecraft_version
 	if (oldClientTarget) from('src/legacytest/java')
 	from('src/gametest/java') {
@@ -236,4 +243,18 @@ if (legacyTarget) {
 		archiveFileName = 'lowhealth-client-audit-remapped.jar'
 		destinationDirectory = layout.buildDirectory.dir('testlibs')
 	}
+}
+
+// Fabric's 1.21.9-era fixture gives spawn generation only 1200 ticks.
+// Extend only world loading in the separate test jar; keep every mod assertion strict.
+if (extendedWorldLoadAudit) {
+    sourceSets.gametest.resources.srcDir('src/worldloadtest/resources')
+    tasks.named('processGametestResources') {
+        doLast {
+            def metadata = new File(destinationDir, 'fabric.mod.json')
+            def json = new groovy.json.JsonSlurper().parse(metadata)
+            json.mixins = ['lowhealth-audit-worldload.mixins.json']
+            metadata.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(json))
+        }
+    }
 }

@@ -1,0 +1,6 @@
+{
+  "required": true,
+  "package": "slooth.lowhealth.audit",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["WorldLoadBudgetMixin"]
+}
