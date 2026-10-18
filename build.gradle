@@ -150,6 +150,7 @@ tasks.register('clientAuditJar', Jar) {
 }
 
 tasks.register('runPackagedClientAudit', net.fabricmc.loom.task.prod.ClientProductionRunTask) {
+	jvmArgs.addAll('-Xms512m', '-Xmx2G')
 	javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(javaTarget) }
 	mods.setFrom(configurations.productionRuntimeMods, tasks.named(legacyTarget ? 'remapClientAuditJar' : 'clientAuditJar'))
 	if (project.hasProperty('audit_jar')) {

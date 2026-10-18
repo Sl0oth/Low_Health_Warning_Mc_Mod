@@ -84,6 +84,11 @@ public class ConfigAuditGameTest implements FabricClientGameTest {
                 ctx.waitTicks(3);check(sounds.get()==before+1,"Resize replayed sound");
                 ctx.clickScreenButton("lowhealth.preview.back");ctx.clickScreenButton("gui.cancel");
             }
+            // Keep software-rendered CI clients from competing with world generation.
+            ctx.runOnClient(c -> {
+                c.options.renderDistance().set(2);
+                c.options.simulationDistance().set(5);
+            });
             try(var world=ctx.worldBuilder().create()) {
                 world.getClientLevel().waitForChunksRender();
                 ctx.runOnClient(c -> {var v=new WarningConfig();v.warningThreshold=20;v.displayMode=2;v.soundEnabled=true;v.soundIntervalSeconds=1;v.soundVolume=.25f;LowHealthWarningClient.saveConfig(v);});
@@ -93,18 +98,23 @@ public class ConfigAuditGameTest implements FabricClientGameTest {
                 ctx.takeScreenshot("live-warning-both");
                 ctx.runOnClient(c -> {var v=LowHealthWarningClient.getConfig();v.soundEnabled=false;LowHealthWarningClient.saveConfig(v);});
                 before=sounds.get();ctx.waitTicks(25);check(sounds.get()==before,"Disabled sound continued");
-                world.getServer().runCommand("effect give @a minecraft:absorption 60 0 true");ctx.waitTicks(5);
+                world.getServer().runCommand("effect give @a minecraft:absorption 60 0 true");
+                awaitClient(ctx, c -> c.player.getAbsorptionAmount()>0, "absorption packet");
                 ctx.runOnClient(c -> check(active(),"Absorption incorrectly counted by default"));
                 ctx.runOnClient(c -> {var v=LowHealthWarningClient.getConfig();v.includeAbsorption=true;LowHealthWarningClient.saveConfig(v);});
                 ctx.waitTicks(3);ctx.runOnClient(c -> check(!active(),"Absorption toggle ignored"));
-                world.getServer().runCommand("effect clear @a");ctx.waitTicks(5);
-                world.getServer().runCommand("gamemode creative @a");ctx.waitTicks(5);
+                world.getServer().runCommand("effect clear @a");
+                awaitClient(ctx, c -> c.player.getAbsorptionAmount()==0, "absorption cleared");
+                world.getServer().runCommand("gamemode creative @a");
+                awaitClient(ctx, c -> c.player.getAbilities().instabuild && !c.player.isSpectator(), "Creative mode packet");
                 ctx.runOnClient(c -> check(!active(),"Warning in Creative despite toggle off"));
                 ctx.runOnClient(c -> {var v=LowHealthWarningClient.getConfig();v.warnInCreative=true;LowHealthWarningClient.saveConfig(v);});
                 ctx.waitTicks(3);ctx.runOnClient(c -> check(active(),"Creative toggle ignored"));
-                world.getServer().runCommand("gamemode spectator @a");ctx.waitTicks(5);
+                world.getServer().runCommand("gamemode spectator @a");
+                awaitClient(ctx, c -> c.player.isSpectator(), "Spectator mode packet");
                 ctx.runOnClient(c -> check(!active(),"Spectator warning"));
-                world.getServer().runCommand("gamemode survival @a");ctx.waitTicks(5);
+                world.getServer().runCommand("gamemode survival @a");
+                awaitClient(ctx, c -> !c.player.getAbilities().instabuild && !c.player.isSpectator(), "Survival mode packet");
                 ctx.getInput().pressKey(GLFW.GLFW_KEY_H);ctx.waitForScreen(LowHealthConfigScreen.class);
                 click(ctx,"enabled");ctx.clickScreenButton("gui.done");ctx.waitTicks(3);
                 ctx.runOnClient(c -> check(!active(),"Disable did not clear warning"));
@@ -123,6 +133,18 @@ public class ConfigAuditGameTest implements FabricClientGameTest {
                 ctx.waitTicks(3);ctx.runOnClient(c -> check(!active(),"Warning above threshold"));
             }
         } finally {ctx.runOnClient(c -> c.getSoundManager().removeListener(listener));}
+    }
+    private static void awaitClient(ClientGameTestContext ctx,
+            java.util.function.Predicate<net.minecraft.client.Minecraft> condition, String label) {
+        for (int i=0;i<200;i++) {
+            if (ctx.computeOnClient(c -> c.player!=null && condition.test(c))) {
+                // Observe production's end-of-tick update after the state packet arrived.
+                ctx.waitTicks(2);
+                return;
+            }
+            ctx.waitTicks(1);
+        }
+        throw new AssertionError("Timed out waiting for " + label);
     }
     private static boolean active() {
         try {var f=LowHealthWarningClient.class.getDeclaredField("STATE");f.setAccessible(true);return ((WarningState)f.get(null)).isActive();}

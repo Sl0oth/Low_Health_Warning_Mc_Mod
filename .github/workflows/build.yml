@@ -2,6 +2,7 @@ name: build and client audit
 on:
   pull_request:
   push:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,7 +28,7 @@ jobs:
             25
       - uses: gradle/actions/setup-gradle@v4
       - name: Install virtual display for client tests
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libopenal1
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-xserver-utils mesa-utils libgl1-mesa-dri libopenal1
       - name: Build once and test each compatible version
         run: python3 scripts/build_release.py --group '${{ matrix.group }}'
       - name: Collect verified release candidates
@@ -60,9 +61,11 @@ jobs:
             21
       - uses: gradle/actions/setup-gradle@v4
       - name: Install virtual display for client tests
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libopenal1
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-xserver-utils mesa-utils libgl1-mesa-dri libopenal1
+      - name: Check virtual display and OpenGL
+        run: xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX +render -noreset' sh -c 'xrandr --query && glxinfo -B'
       - name: Build and audit packaged Forge client
-        run: JAVA21_HOME="$JAVA_HOME_21_X64" JAVA8_HOME="$JAVA_HOME_8_X64" xvfb-run -a python3 scripts/audit_forge.py
+        run: JAVA21_HOME="$JAVA_HOME_21_X64" JAVA8_HOME="$JAVA_HOME_8_X64" xvfb-run -a -s '-screen 0 1280x720x24 +extension GLX +render -noreset' python3 scripts/audit_forge.py
       - name: Collect verified Forge candidate
         uses: actions/upload-artifact@v4
         with:
