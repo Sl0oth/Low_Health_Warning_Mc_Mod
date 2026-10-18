@@ -1,142 +1,74 @@
 package slooth.lowhealth;
 
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.widget.SliderWidget;
-import net.minecraft.text.Text;
-import com.google.gson.JsonObject;
-import slooth.lowhealth.lowhealthconfig;
-import slooth.lowhealth.LowHealthWarningClient;
-import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
-public class LowHealthConfigScreen extends Screen {
-
-    private final JsonObject json;
+/** Draft settings match the published mod: Done saves, Cancel/Escape discard. */
+public class LowHealthConfigScreen extends Screen implements ConfigurationView {
     private final Screen parent;
-    private TextFieldWidget messageField;
-    private int messageFieldLabelX;
-    private int messageFieldLabelY;
+    private WarningConfig draft = LowHealthWarningClient.getConfig();
+    private boolean saveFailed;
+    private int top;
 
-    public LowHealthConfigScreen(JsonObject json, Screen parent) {
-        super(Text.of(json.get("title").getAsString()));
-        this.json = json;
+    public LowHealthConfigScreen(Screen parent) {
+        super(Component.translatable("screen.lowhelthwarning.title"));
         this.parent = parent;
     }
+    private static Component label(String key, Object... args) {
+        return Component.translatable("option.lowhelthwarning." + key, args);
+    }
+    private static Component onOff(boolean on) { return Component.translatable(on ? "options.on" : "options.off"); }
 
     @Override
     protected void init() {
-        int y = height / 4;
-
-        if (json.has("widgets")) {
-            for (var widget : json.getAsJsonArray("widgets")) {
-                var obj = widget.getAsJsonObject();
-                String type = obj.get("type").getAsString();
-                String label = obj.get("label").getAsString();
-
-                if (type.equals("toggle")) {
-                    boolean currentState = LowHealthWarningClient.warningEnabled;
-                    String displayLabel = currentState ? "Disable Warning" : "Enable Warning";
-
-                    ButtonWidget toggleButton = ButtonWidget.builder(Text.of(displayLabel), btn -> {
-                        LowHealthWarningClient.warningEnabled = !LowHealthWarningClient.warningEnabled;
-                        btn.setMessage(Text.of(LowHealthWarningClient.warningEnabled ? "Disable Warning" : "Enable Warning"));
-                        LowHealthWarningClient.saveConfig();
-                    }).dimensions(width / 2 - 100, y, 200, 20).build();
-
-                    this.addDrawableChild(toggleButton);
-                    y += 30;
-                }
-
-                else if (type.equals("slider")) {
-                    int min = obj.get("min").getAsInt();
-                    int max = obj.get("max").getAsInt();
-                    int range = max - min;
-
-                    // --- Warning Message Text Field + Label ---
-                    String warningLabelStr = "Warning Message";
-                    int labelWidth = textRenderer.getWidth(warningLabelStr);
-                    int textFieldRightEdge = width / 2 + 100;
-                    int textFieldWidth = textFieldRightEdge - (width / 2 - 100 + labelWidth + 10);
-                    int fieldX = textFieldRightEdge - textFieldWidth;
-                    int labelX = fieldX - labelWidth - 5;
-
-                    messageField = new TextFieldWidget(
-                            this.textRenderer, fieldX, y, textFieldWidth, 20, Text.of("Custom Message")
-                    );
-                    messageField.setText(LowHealthWarningClient.warningMessage);
-                    messageField.setChangedListener(text -> {
-                        LowHealthWarningClient.warningMessage = text;
-                        LowHealthWarningClient.saveConfig();
-                    });
-
-                    this.addSelectableChild(messageField);
-                    this.addDrawableChild(messageField);
-                    messageFieldLabelX = labelX;
-                    messageFieldLabelY = y + 6;
-
-                    y += 35;
-
-                    // --- Slider ---
-                    SliderWidget slider = new SliderWidget(width / 2 - 100, y, 200, 20,
-                            Text.of("Threshold: " + LowHealthWarningClient.warningThreshold),
-                            (double)(LowHealthWarningClient.warningThreshold - min) / range) {
-                        @Override
-                        protected void updateMessage() {
-                            setMessage(Text.of("Threshold: " + (min + (int)(value * range))));
-                        }
-
-                        @Override
-                        protected void applyValue() {
-                            LowHealthWarningClient.warningThreshold = min + (int)(this.value * range);
-                            System.out.println("[LowHealth] Slider applied value: " + LowHealthWarningClient.warningThreshold);
-                            LowHealthWarningClient.saveConfig();
-                        }
-                    };
-                    this.addDrawableChild(slider);
-                    y += 35;
-
-                    // --- Display Mode Button ---
-                    ButtonWidget modeButton = ButtonWidget.builder(Text.of(getModeLabel()), btn -> {
-                        LowHealthWarningClient.displayMode = (LowHealthWarningClient.displayMode + 1) % 3;
-                        btn.setMessage(Text.of(getModeLabel()));
-                        LowHealthWarningClient.saveConfig();
-                    }).dimensions(width / 2 - 100, y, 200, 20).build();
-
-                    this.addDrawableChild(modeButton);
-                    y += 35;
-                }
-
-                else if (type.equals("button") && label.equalsIgnoreCase("Back")) {
-                    ButtonWidget button = ButtonWidget.builder(Text.of(label), btn -> {
-                        LowHealthWarningClient.saveConfig();
-                        if (parent != null) {
-                            MinecraftClient.getInstance().setScreen(parent);
-                        }
-                    }).dimensions(width / 2 - 75, height - 40, 150, 20).build();
-
-                    this.addDrawableChild(button);
-                }
-            }
-        }
+        top = Math.max(28, (height - 202) / 2);
+        int left = width / 2 - 150;
+        var message = new EditBox(font, left, top + 12, 300, 20, label("message"));
+        message.setMaxLength(120);
+        message.setValue(draft.warningMessage);
+        message.setResponder(text -> draft.warningMessage = text);
+        addRenderableWidget(message);
+        int y = top + 38;
+        button(left, y, () -> label("enabled", onOff(draft.warningEnabled)), () -> draft.warningEnabled = !draft.warningEnabled);
+        button(left + 154, y, () -> label("mode", label("mode." + draft.displayMode)), () -> draft.displayMode = (draft.displayMode + 1) % 3);
+        y += 24;
+        slider(left, y, (draft.warningThreshold - 1) / 39.0, value -> draft.warningThreshold = 1 + (int)Math.round(value * 39),
+                () -> label("threshold", draft.warningThreshold / 2.0));
+        button(left + 154, y, () -> label("absorption", onOff(draft.includeAbsorption)), () -> draft.includeAbsorption = !draft.includeAbsorption);
+        y += 24;
+        button(left, y, () -> label("sound", onOff(draft.soundEnabled)), () -> draft.soundEnabled = !draft.soundEnabled);
+        slider(left + 154, y, draft.soundVolume, value -> draft.soundVolume = value.floatValue(), () -> label("volume", Math.round(draft.soundVolume * 100)));
+        y += 24;
+        button(left, y, () -> label("interval", draft.soundIntervalSeconds), () -> draft.soundIntervalSeconds = draft.soundIntervalSeconds % 10 + 1);
+        button(left + 154, y, () -> label("creative", onOff(draft.warnInCreative)), () -> draft.warnInCreative = !draft.warnInCreative);
+        y += 24;
+        button(left, y, () -> label("preview"), () -> ModernCompat.setScreen(minecraft, new LowHealthPreviewScreen(this, draft)));
+        button(left + 154, y, () -> label("reset"), () -> { draft = new WarningConfig(); clearWidgets(); init(); });
+        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), b -> onClose()).bounds(left, top + 176, 146, 20).build());
+        addRenderableWidget(Button.builder(Component.translatable("gui.done"), b -> {
+            if (LowHealthWarningClient.saveConfig(draft)) onClose(); else saveFailed = true;
+        }).bounds(left + 154, top + 176, 146, 20).build());
     }
-
-    private String getModeLabel() {
-        return switch (LowHealthWarningClient.displayMode) {
-            case 0 -> "Just Overlay";
-            case 1 -> "Just Title";
-            default -> "Both";
-        };
+    private void button(int x, int y, Supplier<Component> text, Runnable action) {
+        addRenderableWidget(Button.builder(text.get(), b -> { action.run(); b.setMessage(text.get()); }).bounds(x,y,146,20).build());
     }
-
-    @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        renderBackground(context, mouseX, mouseY, delta);
-        super.render(context, mouseX, mouseY, delta);
-
-        if (messageField != null) {
-            context.drawText(textRenderer, "Warning Message", messageFieldLabelX, messageFieldLabelY, 0xFFFFFF, false);
-        }
+    private void slider(int x, int y, double initial, Consumer<Double> change, Supplier<Component> text) {
+        addRenderableWidget(new AbstractSliderButton(x,y,146,20,text.get(),initial) {
+            @Override protected void updateMessage() { setMessage(text.get()); }
+            @Override protected void applyValue() { change.accept(value); updateMessage(); }
+        });
+    }
+    @Override public void onClose() { ModernCompat.setScreen(minecraft, parent); }
+    @Override public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
+        super.extractRenderState(context, mouseX, mouseY, delta);
+        context.centeredText(font,title,width/2,top-18,0xFFFFFFFF);
+        context.text(font,label("message"),width/2-150,top,0xFFFFFFFF);
+        context.centeredText(font,label(saveFailed ? "save_failed" : "hint"),width/2,top+158,saveFailed ? 0xFFFF5555 : 0xFFAAAAAA);
     }
 }

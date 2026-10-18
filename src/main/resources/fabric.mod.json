@@ -1,57 +1,37 @@
 {
-	"schemaVersion": 1,
-	"id": "lowhelthwarning",
-	"version": "1.0.1",
-	"name": "LowHealthWarning",
-	"description": "This mod gives you a warning when your health is below your preferred amount.",
-	"authors": [
-		"Sl0oth"
-	],
-	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
-	},
-	"license": "CC0-1.0",
-	"icon": "assets/lowhelthwarning/icon.png",
-	"environment": "*",
-	"entrypoints": {
-		"main": [
-			{
-				"value": "slooth.lowhealth.LowHelthWarning",
-				"adapter": "kotlin"
-			}
-		],
-		"client": [
-			{
-				"value": "slooth.lowhealth.LowHealthConfigMod",
-				"adapter": "kotlin"
-			},
-			{
-				"value": "slooth.lowhealth.LowHealthWarningClient",
-				"adapter": "kotlin"
-			}
-		],
-		"modmenu": [
-			"slooth.lowhealth.LowHealthModMenuIntegration"
-		]
-	},
-	"mixins": [
-		{
-			"config": "lowhelthwarning.client.mixins.json",
-			"environment": "client"
-		}
-	],
-	"depends": {
-		"fabricloader": ">=0.16.14",
-		"minecraft": "~1.21.4",
-		"java": ">=21",
-		"fabric-api": "*",
-		"fabric-language-kotlin": "*"
-	},
-	"suggests": {
-		"another-mod": "*"
-	},
-	"custom": {
-		"modmenu:api": true
-	}
+  "schemaVersion": 1,
+  "id": "lowhelthwarning",
+  "version": "${version}",
+  "name": "Low Health Warning",
+  "description": "Shows a configurable warning when your health drops below the threshold.",
+  "authors": [
+    "Sl0oth"
+  ],
+  "license": "CC0-1.0",
+  "icon": "assets/lowhelthwarning/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      {
+        "value": "slooth.lowhealth.LowHealthWarning",
+        "adapter": "kotlin"
+      }
+    ],
+    "client": [
+      "slooth.lowhealth.LowHealthWarningClient"
+    ],
+    "modmenu": [
+      "slooth.lowhealth.LowHealthModMenuIntegration"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "${minecraft_range}",
+    "java": ">=${java_target}",
+    "fabric-api": "*",
+    "fabric-language-kotlin": "*"
+  },
+  "custom": {
+    "modmenu:api": true
+  }
 }

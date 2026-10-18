@@ -1,30 +1,81 @@
-# Automatically build the project and run any configured tests for every push
-# and submitted pull request. This can help catch issues that only occur on
-# certain platforms or Java versions, and provides a first line of defence
-# against bad commits.
-
-name: build
-on: [pull_request, push]
-
+name: build and client audit
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  build:
+  fabric:
     runs-on: ubuntu-24.04
+    env:
+      ALSOFT_DRIVERS: 'null'
+      LIBGL_ALWAYS_SOFTWARE: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ['1.20-1.20.6', '1.21-1.21.5', '1.21.6-1.21.8', '1.21.9-1.21.11', '26.1-26.2']
     steps:
-      - name: checkout repository
-        uses: actions/checkout@v4
-      - name: validate gradle wrapper
-        uses: gradle/actions/wrapper-validation@v4
-      - name: setup jdk
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'microsoft'
-      - name: make gradle wrapper executable
-        run: chmod +x ./gradlew
-      - name: build
-        run: ./gradlew build
-      - name: capture build artifacts
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install virtual display for client tests
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libopenal1
+      - name: Build once and test each compatible version
+        run: python3 scripts/build_release.py --group '${{ matrix.group }}'
+      - name: Collect verified release candidates
         uses: actions/upload-artifact@v4
         with:
-          name: Artifacts
-          path: build/libs/
+          name: low-health-warning-${{ matrix.group }}
+          if-no-files-found: error
+          path: |
+            build/releases/*/*.jar
+            build/releases/*/*.json
+      - name: Collect diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ matrix.group }}
+          path: build/audit/*.log
+  forge:
+    runs-on: ubuntu-24.04
+    env:
+      ALSOFT_DRIVERS: 'null'
+      LIBGL_ALWAYS_SOFTWARE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            8
+            21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install virtual display for client tests
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libopenal1
+      - name: Build and audit packaged Forge client
+        run: JAVA21_HOME="$JAVA_HOME_21_X64" JAVA8_HOME="$JAVA_HOME_8_X64" xvfb-run -a python3 scripts/audit_forge.py
+      - name: Collect verified Forge candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: low-health-warning-forge-1.8.9
+          if-no-files-found: error
+          path: |
+            build/releases/*/*forge*.jar
+            build/releases/*/*forge*.json
+      - name: Collect diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-forge-1.8.9
+          path: |
+            build/audit/*.log
+            forge-1.8.9/build/audit-launch.json

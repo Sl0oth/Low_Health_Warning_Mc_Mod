@@ -1,14 +1,21 @@
 plugins {
-	id 'fabric-loom' version "${loom_version}"
+	id 'net.fabricmc.fabric-loom' version "${loom_version}" apply false
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}" apply false
 	id 'maven-publish'
-	id "org.jetbrains.kotlin.jvm" version "2.1.21"
+	id "org.jetbrains.kotlin.jvm" version "2.3.21"
 }
+
+apply plugin: (project.minecraft_version.startsWith('26.') ? 'net.fabricmc.fabric-loom' : 'net.fabricmc.fabric-loom-remap')
 
 version = project.mod_version
 group = project.maven_group
 
+def legacyTarget = !project.minecraft_version.startsWith("26.")
+def oldClientTarget = project.minecraft_version in ['1.20','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5','1.20.6','1.21','1.21.1','1.21.2','1.21.3']
+def javaTarget = project.minecraft_version in ['1.20','1.20.1','1.20.2','1.20.3','1.20.4'] ? 17 : (legacyTarget ? 21 : 25)
+
 base {
-	archivesName = project.archives_base_name
+	archivesName = "${project.archives_base_name}-mc${project.minecraft_version}"
 }
 
 repositories {
@@ -37,32 +44,39 @@ loom {
 
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-	modImplementation "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
-	modImplementation "com.terraformersmc:modmenu:13.0.3"
-	implementation 'net.minidev:json-smart:2.4.10'
-	implementation 'org.json:json:20231013'
+	if (legacyTarget) {
+		mappings loom.officialMojangMappings()
+		modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+		modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+		modImplementation "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
+		modImplementation "com.terraformersmc:modmenu:${project.modmenu_version}"
+	} else {
+		implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+		implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+		implementation "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
+		implementation "com.terraformersmc:modmenu:${project.modmenu_version}"
+	}
 }
 
 
 
 processResources {
 	inputs.property "version", project.version
+	inputs.property "java_target", javaTarget
+	inputs.property "minecraft_range", project.findProperty("minecraft_range") ?: (project.minecraft_version.startsWith("26.1") ? ">=26.1 <26.2" : project.minecraft_version)
 
 	filesMatching("fabric.mod.json") {
-		expand "version": inputs.properties.version
+		expand "version": inputs.properties.version, "minecraft_range": inputs.properties.minecraft_range, "java_target": inputs.properties.java_target
 	}
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+	it.options.release = javaTarget
 }
 
-tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).all {
-	kotlinOptions {
-		jvmTarget = 21
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+	compilerOptions {
+		jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(javaTarget.toString())
 	}
 }
 
@@ -72,8 +86,8 @@ java {
 	// If you remove this line, sources will not be generated.
 	withSourcesJar()
 
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+	sourceCompatibility = JavaVersion.toVersion(javaTarget)
+	targetCompatibility = JavaVersion.toVersion(javaTarget)
 }
 
 jar {
@@ -100,5 +114,125 @@ publishing {
 		// The repositories here will be used for publishing your artifact, not for
 		// retrieving dependencies.
 		mavenCentral()
+	}
+}
+
+// Isolated client regression checks; test code is not included in release jars.
+if (!oldClientTarget) fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = 'lowhealth-preview-test'
+		enableGameTests = false
+		enableClientGameTests = true
+		clearRunDirectory = false
+	}
+}
+
+if (oldClientTarget) {
+    sourceSets.create('gametest') {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.client.compileClasspath + sourceSets.main.output + sourceSets.client.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.client.runtimeClasspath
+        resources.setSrcDirs(['src/legacytest/resources'])
+    }
+}
+
+// Test the identical packaged mod across compatible Minecraft patch versions.
+dependencies {
+	productionRuntimeMods "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+	productionRuntimeMods "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
+	productionRuntimeMods "com.terraformersmc:modmenu:${project.modmenu_version}"
+}
+
+tasks.register('clientAuditJar', Jar) {
+	from sourceSets.gametest.output
+	archiveFileName = 'lowhealth-client-audit.jar'
+	destinationDirectory = layout.buildDirectory.dir('testlibs')
+}
+
+tasks.register('runPackagedClientAudit', net.fabricmc.loom.task.prod.ClientProductionRunTask) {
+	javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(javaTarget) }
+	mods.setFrom(configurations.productionRuntimeMods, tasks.named(legacyTarget ? 'remapClientAuditJar' : 'clientAuditJar'))
+	if (project.hasProperty('audit_jar')) {
+		mods.from(file(project.property('audit_jar')))
+	} else {
+		mods.from(tasks.named(legacyTarget ? 'remapJar' : 'jar'))
+	}
+	if (!oldClientTarget) jvmArgs.add('-Dfabric.client.gametest')
+	runDir = layout.buildDirectory.dir("run/packaged-${project.minecraft_version}")
+}
+
+// Share behavior and UI; adapt legacy source names and the test framework APIs.
+def modernAdapter = project.minecraft_version == '26.2'
+def prepareClientSources = tasks.register('prepareClientSources', Sync) {
+	inputs.property 'minecraftTarget', project.minecraft_version
+	from('src/client/java') {
+		if (legacyTarget) exclude '**/ModernCompat.java'
+	}
+	if (legacyTarget) from('src/versions/legacy/java')
+	into layout.buildDirectory.dir('generated/client')
+}
+sourceSets.client.java.setSrcDirs([prepareClientSources])
+tasks.named('compileClientKotlin') { dependsOn prepareClientSources }
+
+def prepareAuditSources = tasks.register('prepareAuditSources', Sync) {
+	inputs.property 'minecraftTarget', project.minecraft_version
+	if (oldClientTarget) from('src/legacytest/java')
+	from('src/gametest/java') {
+		filter { line -> modernAdapter ? line.replace('world.getClientLevel()', 'world.getConnection()') : line }
+	}
+	into layout.buildDirectory.dir('generated/gametest')
+}
+sourceSets.gametest.java.setSrcDirs([prepareAuditSources])
+tasks.named('compileGametestKotlin') { dependsOn prepareAuditSources }
+
+if (legacyTarget) {
+	tasks.named('prepareClientSources') {
+		inputs.property 'minecraftTarget', project.minecraft_version
+		doLast {
+			fileTree(destinationDir).matching { include '**/*.java' }.each { file ->
+				def text = file.text.replace('GuiGraphicsExtractor', 'GuiGraphics').replace('extractRenderState', 'render')
+				text = text.replace('.centeredText(', '.drawCenteredString(').replace('.text(', '.drawString(')
+                if (project.minecraft_version in ['1.20','1.20.1'] && file.name in ['LowHealthConfigScreen.java','LowHealthPreviewScreen.java']) {
+                    text = text.replace('super.render(', 'context.fillGradient(0, 0, width, height, 0xC0101010, 0xD0101010); super.render(')
+                }
+				if (project.minecraft_version != '1.21.11') text = text.replace('net.minecraft.resources.Identifier', 'net.minecraft.resources.ResourceLocation')
+				text = text.replace('net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper.registerKeyMapping', 'net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper.registerKeyBinding')
+				if (oldClientTarget || project.minecraft_version in ['1.21.4','1.21.5','1.21.6','1.21.7','1.21.8']) {
+					text = text.replace('net.minecraft.client.KeyMapping.Category.register(net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("lowhelthwarning", "settings"))', '"category.lowhelthwarning"')
+				}
+				if (oldClientTarget || project.minecraft_version in ['1.21.4','1.21.5']) {
+					text = text.replace('.pushMatrix()', '.pushPose()').replace('.popMatrix()', '.popPose()')
+					text = text.replace('.translate((float)width / 2.0f, (float)y)', '.translate((float)width / 2.0f, (float)y, 0)')
+					text = text.replace('.scale(scale, scale)', '.scale(scale, scale, 1)')
+				}
+				if (file.name == 'ModernCompat.java') {
+					int start = text.indexOf('        net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry.attachElementBefore(')
+					int end = text.indexOf('(context, delta) -> render.accept(context));', start) + '(context, delta) -> render.accept(context));'.length()
+					text = text.substring(0,start) + '        net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register((context, delta) -> render.accept(context));' + text.substring(end)
+				}
+				file.text = text
+			}
+		}
+	}
+	tasks.named('prepareAuditSources') {
+		inputs.property 'minecraftTarget', project.minecraft_version
+		doLast {
+			fileTree(destinationDir).matching { include '**/*.java' }.each { file ->
+				def text = file.text.replace('c.resizeGui()', 'c.resizeDisplay()').replace('world.getClientLevel()', 'world.getClientWorld()')
+				if (project.minecraft_version != '1.21.11') text = text.replace('sound.getIdentifier()', 'sound.getLocation()')
+                if (project.minecraft_version in ['1.20','1.20.1','1.20.2']) {
+                    text = text.replace('(sound, event, range) ->', '(sound, event) ->')
+                    if (project.minecraft_version != '1.20.2') text = text.replace('c.disconnect()', 'c.clearLevel()')
+                    for (symbol in ['w','o']) text = text.replace(symbol+'.getRight()', '('+symbol+'.getX()+'+symbol+'.getWidth())').replace(symbol+'.getBottom()', '('+symbol+'.getY()+'+symbol+'.getHeight())')
+                }
+				if (oldClientTarget) text = text.replace('net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext', 'slooth.lowhealth.audit.ClientGameTestContext').replace('net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest', 'slooth.lowhealth.audit.FabricClientGameTest')
+				file.text = text
+			}
+		}
+	}
+	tasks.register('remapClientAuditJar', net.fabricmc.loom.task.RemapJarTask) {
+		inputFile = tasks.named('clientAuditJar').flatMap { it.archiveFile }
+		archiveFileName = 'lowhealth-client-audit-remapped.jar'
+		destinationDirectory = layout.buildDirectory.dir('testlibs')
 	}
 }
